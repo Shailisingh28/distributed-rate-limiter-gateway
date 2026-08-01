@@ -34,7 +34,7 @@ public class InMemorySlidingWindowLimiter implements RateLimiter {
             long elapsedSinceWindowStart = now - currentWindowStart;
             if (elapsedSinceWindowStart >= windowSizeMillis) {
                 long windowsElapsed = elapsedSinceWindowStart / windowSizeMillis;
-                if (windowSizeMillis == 1) {
+                if (windowsElapsed == 1) {
                     // exactly one window boundary crossed - shift current into previous
                     previousWindowCount = currentWindowCount;
                 } else {
