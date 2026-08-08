@@ -33,7 +33,8 @@ public class RedisTokenBucketLimiter implements RateLimiter {
         List<String> keys = List.of(bucketKey);
         List<String> args = List.of(String.valueOf(capacity), String.valueOf(refillTokensPerSecond),
                 String.valueOf(now));
-        return redisTemplate.execute(script, keys, args).next().map(result -> result == 1L);
+        return redisTemplate.execute(script, keys, args).next().map(result -> result == 1L).onErrorReturn(true);
+        // fail-open: if Redis is unreachable, allow the request through
     }
 
 }
