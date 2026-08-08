@@ -12,6 +12,9 @@ import com.shaili.ratelimiter.limiter.RateLimiter;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
+import io.github.resilience4j.reactor.retry.RetryOperator;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.retry.RetryRegistry;
 import reactor.core.publisher.Mono;
 
 @RestController
@@ -19,12 +22,14 @@ public class GatewayController {
     private final RateLimiter rateLimiter;
     private final WebClient webClient;
     private final CircuitBreaker circuitBreaker;
+    private final Retry retry;
 
     public GatewayController(RateLimiter rateLimiter, WebClient.Builder webClientBuilder,
-            CircuitBreakerRegistry circuitBreakerRegistry) {
+            CircuitBreakerRegistry circuitBreakerRegistry, RetryRegistry retryRegistry) {
         this.rateLimiter = rateLimiter;
         this.webClient = webClientBuilder.baseUrl("https://jsonplaceholder.typicode.com").build();
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("downstream-service");
+        this.retry = retryRegistry.retry("downstream-service");
     }
 
     @GetMapping("/api/test")
@@ -39,12 +44,25 @@ public class GatewayController {
         });
     }
 
+    @GetMapping("/api/broken")
+    public Mono<ResponseEntity<String>> handleBrokenRequest(
+            @RequestHeader(value = "X-Api-Key", defaultValue = "anonymous") String apiKey) {
+        return rateLimiter.tryAcquire(apiKey).flatMap(allowed -> {
+            if (!allowed) {
+                return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                        .body("Rate limit exceeded for: " + apiKey));
+            }
+            return callBrokenDownstream();
+        });
+    }
+
     private Mono<ResponseEntity<String>> callDownstream() {
         return webClient.get()
                 .uri("/todos/1")
                 .retrieve()
                 .bodyToMono(String.class)
                 .map(ResponseEntity::ok)
+                .transformDeferred(RetryOperator.of(retry))
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
                 .onErrorResume(ex -> Mono.just(
                         ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -57,5 +75,19 @@ public class GatewayController {
         // MONO return
         // kro tranformed
         // value k saath
+    }
+
+    private Mono<ResponseEntity<String>> callBrokenDownstream() {
+        // deliberately hits a URI that doesn't exist, to simulate a failing downstream
+        return webClient.get()
+                .uri("/this-endpoint-does-not-exist-404")
+                .retrieve()
+                .bodyToMono(String.class)
+                .map(ResponseEntity::ok)
+                .transformDeferred(RetryOperator.of(retry))
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
+                .onErrorResume(ex -> Mono.just(
+                        ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                                .body("Downstream unavailable: " + ex.getMessage())));
     }
 }
