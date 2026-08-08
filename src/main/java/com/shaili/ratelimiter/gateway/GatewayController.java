@@ -9,16 +9,22 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import com.shaili.ratelimiter.limiter.RateLimiter;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import reactor.core.publisher.Mono;
 
 @RestController
 public class GatewayController {
     private final RateLimiter rateLimiter;
     private final WebClient webClient;
+    private final CircuitBreaker circuitBreaker;
 
-    public GatewayController(RateLimiter rateLimiter, WebClient.Builder webClientBuilder) {
+    public GatewayController(RateLimiter rateLimiter, WebClient.Builder webClientBuilder,
+            CircuitBreakerRegistry circuitBreakerRegistry) {
         this.rateLimiter = rateLimiter;
         this.webClient = webClientBuilder.baseUrl("https://jsonplaceholder.typicode.com").build();
+        this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("downstream-service");
     }
 
     @GetMapping("/api/test")
@@ -38,7 +44,11 @@ public class GatewayController {
                 .uri("/todos/1")
                 .retrieve()
                 .bodyToMono(String.class)
-                .map(ResponseEntity::ok);
+                .map(ResponseEntity::ok)
+                .transformDeferred(CircuitBreakerOperator.of(circuitBreaker))
+                .onErrorResume(ex -> Mono.just(
+                        ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                                .body("Downstream unavailable, circuit breaker engaged: " + ex.getMessage())));
         // take the value
         // inside the
         // mono transform
