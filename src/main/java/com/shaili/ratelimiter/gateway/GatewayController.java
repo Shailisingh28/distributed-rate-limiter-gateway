@@ -15,6 +15,8 @@ import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOper
 import io.github.resilience4j.reactor.retry.RetryOperator;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import reactor.core.publisher.Mono;
 
 @RestController
@@ -23,13 +25,17 @@ public class GatewayController {
     private final WebClient webClient;
     private final CircuitBreaker circuitBreaker;
     private final Retry retry;
+    private final Counter rateLimitRejectedCounter;
 
     public GatewayController(RateLimiter rateLimiter, WebClient.Builder webClientBuilder,
-            CircuitBreakerRegistry circuitBreakerRegistry, RetryRegistry retryRegistry) {
+            CircuitBreakerRegistry circuitBreakerRegistry, RetryRegistry retryRegistry, MeterRegistry meterRegistry) {
         this.rateLimiter = rateLimiter;
         this.webClient = webClientBuilder.baseUrl("https://jsonplaceholder.typicode.com").build();
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("downstream-service");
         this.retry = retryRegistry.retry("downstream-service");
+        this.rateLimitRejectedCounter = Counter.builder("gateway.ratelimit.rejected")
+                .description("Number of requests rejected by the rate limiter")
+                .register(meterRegistry);
     }
 
     @GetMapping("/api/test")
@@ -37,6 +43,7 @@ public class GatewayController {
             @RequestHeader(value = "X-Api-Key", defaultValue = "anonymous") String apiKey) {
         return rateLimiter.tryAcquire(apiKey).flatMap(allowed -> {
             if (!allowed) {
+                rateLimitRejectedCounter.increment();
                 return Mono.just(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                         .body("Rate limit exceeded for: " + apiKey));
             }
